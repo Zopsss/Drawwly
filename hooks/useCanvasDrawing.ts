@@ -1,14 +1,19 @@
 import {
   getOrCreateShape,
+  isPointInShape,
   saveDrawingElementToDb,
-  Shapes,
+  Tools,
 } from "@/lib/canvas/canvas";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback, useState } from "react";
 import { Drawable } from "roughjs/bin/core";
 
+const isShape = (tool: Tools) => {
+  return tool !== "Eraser" && tool !== "Panning";
+};
+
 export default function useCanvasDrawings(
-  selectedShape: Shapes,
+  selectedTool: Tools,
   supabase: SupabaseClient | undefined,
   roomId: string | undefined,
   userId: string | undefined
@@ -32,67 +37,86 @@ export default function useCanvasDrawings(
     async (e: React.MouseEvent) => {
       if (!isDrawing || !startingPoint || !supabase) return;
 
-      const { startX, startY } = startingPoint;
+      if (isShape(selectedTool)) {
+        const { startX, startY } = startingPoint;
 
-      const endX = e.clientX;
-      const endY = e.clientY;
+        const endX = e.clientX;
+        const endY = e.clientY;
 
-      const width = endX - startX;
-      const height = endY - startY;
+        const width = endX - startX;
+        const height = endY - startY;
 
-      const newShape = getOrCreateShape(
-        selectedShape,
-        startX,
-        startY,
-        width,
-        height
-      );
-
-      let newShapeId = Date.now().toString();
-      if (roomId && userId) {
-        newShapeId = await saveDrawingElementToDb(
-          selectedShape,
+        const newShape = getOrCreateShape(
+          selectedTool,
           startX,
           startY,
           width,
-          height,
-          roomId,
-          userId
+          height
         );
-      }
 
-      setExistingShapes((prev) => new Map(prev).set(newShapeId, newShape));
+        let newShapeId = Date.now().toString();
+        if (roomId && userId) {
+          newShapeId = await saveDrawingElementToDb(
+            selectedTool,
+            startX,
+            startY,
+            width,
+            height,
+            roomId,
+            userId
+          );
+        }
+
+        setExistingShapes((prev) => new Map(prev).set(newShapeId, newShape));
+
+        setTempShape([]);
+      }
 
       setIsDrawing(false);
       setStartingPoint(null);
-      setTempShape([]);
     },
-    [selectedShape, isDrawing, startingPoint, supabase, roomId, userId]
+    [selectedTool, isDrawing, startingPoint, supabase, roomId, userId]
   );
 
   const handleOnMouseMove = useCallback(
     (e: React.MouseEvent) => {
       if (!isDrawing || !startingPoint) return;
 
-      const { startX, startY } = startingPoint;
-      const currentX = e.clientX;
-      const currentY = e.clientY;
+      if (isShape(selectedTool)) {
+        const { startX, startY } = startingPoint;
+        const currentX = e.clientX;
+        const currentY = e.clientY;
 
-      const width = currentX - startX;
-      const height = currentY - startY;
+        const width = currentX - startX;
+        const height = currentY - startY;
 
-      const newShape = getOrCreateShape(
-        selectedShape,
-        startX,
-        startY,
-        width,
-        height
-      );
+        const newShape = getOrCreateShape(
+          selectedTool,
+          startX,
+          startY,
+          width,
+          height
+        );
 
-      // simplifying temp shape by always keeping it an array.
-      setTempShape(Array.isArray(newShape) ? newShape : [newShape]);
+        // simplifying temp shape by always keeping it an array.
+        setTempShape(Array.isArray(newShape) ? newShape : [newShape]);
+      } else if (selectedTool === "Eraser") {
+        // handleEraser(e, setExistingShapes);
+        const { clientX, clientY } = e;
+        setExistingShapes((prev) => {
+          const newShapes = new Map(prev);
+          newShapes.forEach(async (shape, id) => {
+            if (isPointInShape(clientX, clientY, shape)) {
+              newShapes.delete(id);
+              if (supabase && roomId)
+                await supabase.from("drawing_elements").delete().eq("id", id);
+            }
+          });
+          return newShapes;
+        });
+      }
     },
-    [selectedShape, isDrawing, startingPoint]
+    [selectedTool, isDrawing, startingPoint]
   );
 
   return {

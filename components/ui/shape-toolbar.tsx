@@ -1,6 +1,6 @@
 "use client";
 
-import { Shapes } from "@/lib/canvas/canvas";
+import { Shapes, Tools } from "@/lib/canvas/canvas";
 import {
   Circle,
   Eraser,
@@ -22,14 +22,14 @@ const icons: { icon: JSX.Element; type: Shapes }[] = [
 ];
 
 export default function ShapeToolbar({
-  selectedShape,
-  setSelectedShape,
+  selectedTool,
+  setSelectedTool,
 }: {
-  selectedShape: Shapes;
-  setSelectedShape: (shape: Shapes) => void;
+  selectedTool: Tools;
+  setSelectedTool: (shape: Tools) => void;
 }) {
   const handleEraser = () => {
-    setSelectedShape("Eraser");
+    setSelectedTool("Eraser");
   };
 
   return (
@@ -43,9 +43,9 @@ export default function ShapeToolbar({
           {icons.map((shape, _) => (
             <span
               key={_}
-              onClick={() => setSelectedShape(shape.type)}
+              onClick={() => setSelectedTool(shape.type)}
               className={`cursor-pointer p-1 rounded-md ${
-                selectedShape === shape.type && "bg-purple-100"
+                selectedTool === shape.type && "bg-purple-100"
               }`}
             >
               {shape.icon}
@@ -53,7 +53,7 @@ export default function ShapeToolbar({
           ))}
           <span
             onClick={handleEraser}
-            className={`cursor-pointer p-1 rounded-md ${selectedShape === "Eraser" && "bg-purple-100"}`}
+            className={`cursor-pointer p-1 rounded-md ${selectedTool === "Eraser" && "bg-purple-100"}`}
           >
             <Eraser />
           </span>
