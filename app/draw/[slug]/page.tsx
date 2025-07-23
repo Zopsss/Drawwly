@@ -17,7 +17,6 @@ export default async function Page({ params }: PageProps) {
 
   if (!user) return notFound();
 
-  // Check if room exists (more efficient - only fetch needed fields)
   const { data: room, error } = await supabase
     .from("rooms")
     .select("id")
@@ -32,7 +31,6 @@ export default async function Page({ params }: PageProps) {
     notFound();
   }
 
-  // Your drawing page content here
   return (
     <div>
       <Canvas roomId={room.id} userId={user.id} />
