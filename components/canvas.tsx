@@ -1,6 +1,6 @@
 "use client";
 
-import { Tools, getOrCreateShape } from "@/lib/canvas/canvas";
+import { CanvasElement, Tools, getOrCreateShape } from "@/lib/canvas/canvas";
 import { createClient } from "@/lib/supabase/client";
 import { SupabaseClient } from "@supabase/supabase-js";
 
@@ -10,7 +10,6 @@ import rough from "roughjs";
 import { CursorFollower } from "./cursor-follower";
 import ShapeToolbar from "./ui/shape-toolbar";
 import useCanvasDrawings from "@/hooks/useCanvasDrawing";
-import { Drawable } from "roughjs/bin/core";
 
 export default function Canvas({
   roomId,
@@ -30,6 +29,7 @@ export default function Canvas({
     existingShapes,
     setExistingShapes,
     tempShape,
+    elementsToDelete,
     handleOnMouseDown,
     handleOnMouseMove,
     handleOnMouseUp,
@@ -59,7 +59,6 @@ export default function Canvas({
     window.addEventListener("resize", updateCanvasSize);
 
     setShowCurosorFollower(true);
-
     return () => window.removeEventListener("resize", updateCanvasSize);
   }, [setExistingShapes]);
   // 👆🏻 adding setExistingShapes as a dependency just to satisfy the linter, it does not matter if we add it or not.
@@ -84,12 +83,13 @@ export default function Canvas({
         }
 
         if (data) {
-          const shapesMap = new Map<string, Drawable | Drawable[]>();
+          const shapesMap = new Map<string, CanvasElement>();
           data.map((element) => {
             const { type, data, id } = element;
             const { x, y, width, height } = data;
+            const shape = getOrCreateShape(type, x, y, width, height);
 
-            shapesMap.set(id, getOrCreateShape(type, x, y, width, height));
+            shapesMap.set(id, { type, x, y, width, height, shape });
           });
 
           setExistingShapes(shapesMap);
@@ -115,12 +115,15 @@ export default function Canvas({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     console.log("existing shapes changed...");
 
-    existingShapes.forEach((shape) => {
-      if (!Array.isArray(shape)) {
-        roughCanvas.draw(shape);
+    existingShapes.forEach((element, id) => {
+      // skip if element is about to be deleted, we draw them separately below
+      if (elementsToDelete.has(id)) return;
+
+      if (!Array.isArray(element.shape)) {
+        roughCanvas.draw(element.shape);
       } else {
         // for handling arrowed line shape
-        shape.forEach((shape) => {
+        element.shape.forEach((shape) => {
           roughCanvas.draw(shape);
         });
       }
@@ -129,7 +132,17 @@ export default function Canvas({
     tempShape.forEach((shape) => {
       roughCanvas.draw(shape);
     });
-  }, [existingShapes, tempShape]);
+
+    elementsToDelete.forEach((shape) => {
+      if (!Array.isArray(shape)) {
+        roughCanvas.draw(shape);
+      } else {
+        shape.forEach((shape) => {
+          roughCanvas.draw(shape);
+        });
+      }
+    });
+  }, [existingShapes, tempShape, elementsToDelete]);
 
   // Handling new shapes created by other users
   useEffect(() => {
@@ -137,31 +150,27 @@ export default function Canvas({
     if (!supabase || !roomId) return;
 
     const channel = supabase
-      .channel(`drawing-elements-${roomId}`)
+      .channel(`drawing-elements`)
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
           table: "drawing_elements",
-          filter: `user_id=neq.${userId}`,
+          filter: `room_id=eq.${roomId}`, // if new shape is added to current room
         },
         (payload) => {
-          console.log("new payload:", payload);
-          const { id } = payload.new.id;
-          const { x, y, width, height } = payload.new.data;
-          const newShape = getOrCreateShape(
-            payload.new.type,
-            x,
-            y,
-            width,
-            height
-          );
+          if (payload.new.user_id === userId) {
+            return;
+          }
 
-          setExistingShapes((prev) => {
-            console.log("setting existing shape for new payload");
-            const newShapes = new Map(prev);
-            newShapes.set(id, newShape);
+          const { id, type, data } = payload.new;
+          const { x, y, width, height } = data;
+          const newShape = getOrCreateShape(type, x, y, width, height);
+
+          setExistingShapes((prevShapes) => {
+            const newShapes = new Map(prevShapes);
+            newShapes.set(id, { type, x, y, width, height, shape: newShape });
             return newShapes;
           });
         }
@@ -174,23 +183,28 @@ export default function Canvas({
           table: "drawing_elements",
         },
         (payload) => {
-          console.log("delete payload:", payload);
+          const { id } = payload.old;
 
-          setExistingShapes((prev) => {
-            console.log("deleting existing shape for payload");
-            const newShapes = new Map(prev);
-            newShapes.delete(payload.old.id);
-            return newShapes;
+          setExistingShapes((prevShapes) => {
+            const newShapes = new Map(prevShapes);
+            if (newShapes.has(id)) {
+              newShapes.delete(id);
+              return newShapes;
+            }
+            return prevShapes; // Return previous state if ID not found
           });
         }
-      );
-
-    channel.subscribe();
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          console.log("Successfully subscribed to real-time channel!");
+        }
+      });
 
     return () => {
-      channel.unsubscribe();
+      supabase.removeChannel(channel);
     };
-  }, [roomId, setExistingShapes, supabase, userId]);
+  }, [supabase, roomId, userId, setExistingShapes]);
 
   return (
     <div>

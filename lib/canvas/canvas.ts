@@ -1,10 +1,12 @@
 import { createClient } from "@/lib/supabase/client";
 import rough from "roughjs";
-import { Drawable } from "roughjs/bin/core";
+import { Drawable, Options } from "roughjs/bin/core";
 
-const supabase = createClient();
+const SUPABASE = createClient();
 
-const generator = rough.generator({
+const ERASER_TOLERANCE = 7; // 7 pixels
+
+export const generator = rough.generator({
   options: {
     bowing: 1.5,
     strokeWidth: 1.5,
@@ -25,30 +27,48 @@ export type Shapes = "Square" | "Circle" | "Triangle" | "Line" | "ArrowedLine";
 
 export type Tools = "Eraser" | "Panning" | Shapes;
 
+export interface CanvasElement {
+  type: Shapes;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  shape: Drawable | Drawable[];
+}
+
 // used for both - getting the shape and creating the shape.
 export const getOrCreateShape = (
   type: Shapes,
   x: number,
   y: number,
   width: number,
-  height: number
+  height: number,
+  options?: Options
 ) => {
   switch (type) {
     case "Square":
-      return generator.rectangle(x, y, width, height);
+      return generator.rectangle(x, y, width, height, options);
 
     case "Circle":
-      return generator.circle(x + width / 2, y + height / 2, Math.abs(width));
+      return generator.circle(
+        x + width / 2,
+        y + height / 2,
+        Math.abs(width),
+        options
+      );
 
     case "Triangle":
-      return generator.polygon([
-        [x + width / 2, y],
-        [x, y + height],
-        [x + width, y + height],
-      ]);
+      return generator.polygon(
+        [
+          [x + width / 2, y],
+          [x, y + height],
+          [x + width, y + height],
+        ],
+        options
+      );
 
     case "Line":
-      return generator.line(x, y, x + width, y + height);
+      return generator.line(x, y, x + width, y + height, options);
 
     case "ArrowedLine": {
       const lineStartX = x;
@@ -60,7 +80,8 @@ export const getOrCreateShape = (
         lineStartX,
         lineStartY,
         lineEndX,
-        lineEndY
+        lineEndY,
+        options
       );
 
       // Calculate the angle of the line
@@ -83,14 +104,16 @@ export const getOrCreateShape = (
         arrowheadWing1X,
         arrowheadWing1Y,
         lineEndX,
-        lineEndY
+        lineEndY,
+        options
       );
 
       const arrowheadWing2 = generator.line(
         arrowheadWing2X,
         arrowheadWing2Y,
         lineEndX,
-        lineEndY
+        lineEndY,
+        options
       );
 
       return [mainLine, arrowheadWing1, arrowheadWing2];
@@ -110,8 +133,7 @@ export const saveDrawingElementToDb = async (
   user_id: string
 ) => {
   try {
-    const { error, data } = await supabase
-      .from("drawing_elements")
+    const { error, data } = await SUPABASE.from("drawing_elements")
       .insert({
         room_id,
         user_id,
@@ -137,53 +159,152 @@ export const saveDrawingElementToDb = async (
   }
 };
 
-// A function to check if a point is inside a shape's bounding box
-export const isPointInShape = (
+/**
+ * Calculates the shortest distance from a point to a line segment.
+ *
+ * @param x The cursor's x-coordinate.
+ * @param y The cursor's y-coordinate.
+ * @param x1 The line segment's start x.
+ * @param y1 The line segment's start y.
+ * @param x2 The line segment's end x.
+ * @param y2 The line segment's end y.
+ * @returns The shortest distance from the point to the line segment.
+ */
+function distanceToLineSegment(
   x: number,
   y: number,
-  shape: Drawable | Drawable[]
-): boolean => {
-  // This is a simplified check. For more accuracy, you might need a more complex
-  // intersection algorithm based on the shape type.
-  if (Array.isArray(shape)) {
-    return shape.some((s) => isPointInShape(x, y, s));
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number
+): number {
+  const A = x - x1;
+  const B = y - y1;
+  const C = x2 - x1;
+  const D = y2 - y1;
+
+  const dot = A * C + B * D;
+  const len_sq = C * C + D * D;
+  let param = -1;
+  if (len_sq !== 0) {
+    // in case of 0 length line
+    param = dot / len_sq;
   }
 
-  const { x1, y1, x2, y2 } = shape.sets[0].ops.reduce(
-    (acc, op) => {
-      if (op.op === "move" || op.op === "bcurveTo" || op.op === "lineTo") {
-        const points = op.data;
-        for (let i = 0; i < points.length; i += 2) {
-          acc.x1 = Math.min(acc.x1, points[i]);
-          acc.y1 = Math.min(acc.y1, points[i + 1]);
-          acc.x2 = Math.max(acc.x2, points[i]);
-          acc.y2 = Math.max(acc.y2, points[i + 1]);
-        }
-      }
-      return acc;
-    },
-    { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity }
-  );
+  let xx, yy;
 
-  console.log("x: ", x, "x2:", x2, "y:", y, "y2:", y2);
-  return x >= x1 && x <= x2 && y >= y1 && y <= y2;
+  if (param < 0) {
+    xx = x1;
+    yy = y1;
+  } else if (param > 1) {
+    xx = x2;
+    yy = y2;
+  } else {
+    xx = x1 + param * C;
+    yy = y1 + param * D;
+  }
+
+  const dx = x - xx;
+  const dy = y - yy;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+export const isPointOnShapeBorder = (
+  cursorX: number,
+  cursorY: number,
+  element: CanvasElement
+): boolean => {
+  const { type, x, y, width, height } = element;
+
+  switch (type) {
+    case "Line":
+    case "ArrowedLine": {
+      const dist = distanceToLineSegment(
+        cursorX,
+        cursorY,
+        x,
+        y,
+        x + width,
+        y + height
+      );
+      return dist <= ERASER_TOLERANCE;
+    }
+    case "Square": {
+      const topLeft = { x, y };
+      const topRight = { x: x + width, y };
+      const bottomLeft = { x, y: y + height };
+      const bottomRight = { x: x + width, y: y + height };
+
+      const onTop =
+        distanceToLineSegment(
+          cursorX,
+          cursorY,
+          topLeft.x,
+          topLeft.y,
+          topRight.x,
+          topRight.y
+        ) <= ERASER_TOLERANCE;
+      const onRight =
+        distanceToLineSegment(
+          cursorX,
+          cursorY,
+          topRight.x,
+          topRight.y,
+          bottomRight.x,
+          bottomRight.y
+        ) <= ERASER_TOLERANCE;
+      const onBottom =
+        distanceToLineSegment(
+          cursorX,
+          cursorY,
+          bottomRight.x,
+          bottomRight.y,
+          bottomLeft.x,
+          bottomLeft.y
+        ) <= ERASER_TOLERANCE;
+      const onLeft =
+        distanceToLineSegment(
+          cursorX,
+          cursorY,
+          bottomLeft.x,
+          bottomLeft.y,
+          topLeft.x,
+          topLeft.y
+        ) <= ERASER_TOLERANCE;
+
+      return onTop || onRight || onBottom || onLeft;
+    }
+    case "Triangle": {
+      const p1 = { x: x + width / 2, y };
+      const p2 = { x, y: y + height };
+      const p3 = { x: x + width, y: y + height };
+
+      const onSide1 =
+        distanceToLineSegment(cursorX, cursorY, p1.x, p1.y, p2.x, p2.y) <=
+        ERASER_TOLERANCE;
+      const onSide2 =
+        distanceToLineSegment(cursorX, cursorY, p2.x, p2.y, p3.x, p3.y) <=
+        ERASER_TOLERANCE;
+      const onSide3 =
+        distanceToLineSegment(cursorX, cursorY, p3.x, p3.y, p1.x, p1.y) <=
+        ERASER_TOLERANCE;
+
+      return onSide1 || onSide2 || onSide3;
+    }
+    case "Circle": {
+      const centerX = x + width / 2;
+      const centerY = y + height / 2;
+      // In getOrCreateShape, the diameter is Math.abs(width)
+      const radius = Math.abs(width) / 2;
+
+      const distToCenter = Math.sqrt(
+        Math.pow(cursorX - centerX, 2) + Math.pow(cursorY - centerY, 2)
+      );
+
+      // Check if the distance to the center is within the tolerance range of the radius
+      return Math.abs(distToCenter - radius) <= ERASER_TOLERANCE;
+    }
+    default:
+      return false;
+  }
 };
-
-// export const handleEraser = async (
-//   e: React.MouseEvent,
-//   setExistingShapes: React.Dispatch<
-//     SetStateAction<Map<string, Drawable | Drawable[]>>
-//   >
-// ) => {
-//   const { clientX, clientY } = e;
-//   setExistingShapes((prev) => {
-//     const newShapes = new Map(prev);
-//     newShapes.forEach(async (shape, id) => {
-//       if (isPointInShape(clientX, clientY, shape)) {
-//         newShapes.delete(id);
-//         await supabase.from("drawing_elements").delete().eq("id", id);
-//       }
-//     });
-//     return newShapes;
-//   });
-// };

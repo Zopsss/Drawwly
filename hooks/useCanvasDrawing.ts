@@ -1,6 +1,7 @@
 import {
+  CanvasElement,
   getOrCreateShape,
-  isPointInShape,
+  isPointOnShapeBorder,
   saveDrawingElementToDb,
   Tools,
 } from "@/lib/canvas/canvas";
@@ -12,6 +13,11 @@ const isShape = (tool: Tools) => {
   return tool !== "Eraser" && tool !== "Panning";
 };
 
+const DELETION_STROKE_STYLE = {
+  stroke: "rgba(0, 0, 0, 0.3)",
+  strokeWidth: 2,
+};
+
 export default function useCanvasDrawings(
   selectedTool: Tools,
   supabase: SupabaseClient | undefined,
@@ -19,10 +25,13 @@ export default function useCanvasDrawings(
   userId: string | undefined
 ) {
   const [isDrawing, setIsDrawing] = useState(false);
-  const [existingShapes, setExistingShapes] = useState(
-    new Map<string, Drawable | Drawable[]>()
-  );
-  const [tempShape, setTempShape] = useState<Drawable[]>([]); // simplifying temp shape by always keeping it an array.
+  const [elementsToDelete, setElementsToDelete] = useState<
+    Map<string, Drawable | Drawable[]>
+  >(new Map());
+  const [existingShapes, setExistingShapes] = useState<
+    Map<string, CanvasElement>
+  >(new Map());
+  const [tempShape, setTempShape] = useState<Drawable[]>([]); // simplifying temp shape by always keeping it an array ( array is required for arrowed line ).
   const [startingPoint, setStartingPoint] = useState<{
     startX: number;
     startY: number;
@@ -67,15 +76,47 @@ export default function useCanvasDrawings(
           );
         }
 
-        setExistingShapes((prev) => new Map(prev).set(newShapeId, newShape));
+        const shape = {
+          type: selectedTool,
+          x: startX,
+          y: startY,
+          width,
+          height,
+          shape: newShape,
+        };
+        setExistingShapes((prev) => new Map(prev).set(newShapeId, shape));
 
         setTempShape([]);
+      } else if (selectedTool === "Eraser") {
+        if (roomId) {
+          await supabase
+            .from("drawing_elements")
+            .delete()
+            .in("id", Array.from(elementsToDelete.keys()));
+        }
+
+        setExistingShapes((prev) => {
+          const newShapes = new Map(prev);
+          elementsToDelete.forEach((ele, id) => {
+            newShapes.delete(id);
+          });
+          return newShapes;
+        });
       }
 
       setIsDrawing(false);
       setStartingPoint(null);
+      setElementsToDelete(new Map()); // clear the set
     },
-    [selectedTool, isDrawing, startingPoint, supabase, roomId, userId]
+    [
+      selectedTool,
+      isDrawing,
+      startingPoint,
+      supabase,
+      roomId,
+      userId,
+      elementsToDelete,
+    ]
   );
 
   const handleOnMouseMove = useCallback(
@@ -101,28 +142,43 @@ export default function useCanvasDrawings(
         // simplifying temp shape by always keeping it an array.
         setTempShape(Array.isArray(newShape) ? newShape : [newShape]);
       } else if (selectedTool === "Eraser") {
-        // handleEraser(e, setExistingShapes);
         const { clientX, clientY } = e;
-        setExistingShapes((prev) => {
-          const newShapes = new Map(prev);
-          newShapes.forEach(async (shape, id) => {
-            if (isPointInShape(clientX, clientY, shape)) {
-              newShapes.delete(id);
-              if (supabase && roomId)
-                await supabase.from("drawing_elements").delete().eq("id", id);
-            }
-          });
-          return newShapes;
+
+        let changed = false;
+        const newElementsToDelete = new Map(elementsToDelete);
+
+        existingShapes.forEach((element, id) => {
+          if (
+            isPointOnShapeBorder(clientX, clientY, element) &&
+            !elementsToDelete.has(id)
+          ) {
+            const translucentShape = getOrCreateShape(
+              element.type,
+              element.x,
+              element.y,
+              element.width,
+              element.height,
+              DELETION_STROKE_STYLE
+            );
+
+            newElementsToDelete.set(id, translucentShape);
+            changed = true;
+          }
         });
+
+        if (changed) {
+          setElementsToDelete(newElementsToDelete);
+        }
       }
     },
-    [selectedTool, isDrawing, startingPoint]
+    [selectedTool, isDrawing, startingPoint, existingShapes, elementsToDelete]
   );
 
   return {
     existingShapes,
     setExistingShapes,
     tempShape,
+    elementsToDelete,
     handleOnMouseDown,
     handleOnMouseMove,
     handleOnMouseUp,
