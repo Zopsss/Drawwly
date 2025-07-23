@@ -60,6 +60,7 @@ export default function Canvas({
 
     setShowCurosorFollower(true);
 
+    console.log("roomId from canvas:", roomId);
     return () => window.removeEventListener("resize", updateCanvasSize);
   }, [setExistingShapes]);
   // 👆🏻 adding setExistingShapes as a dependency just to satisfy the linter, it does not matter if we add it or not.
@@ -137,33 +138,36 @@ export default function Canvas({
     if (!supabase || !roomId) return;
 
     const channel = supabase
-      .channel(`drawing-elements-${roomId}`)
+      .channel(`drawing-elements`)
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
           table: "drawing_elements",
-          filter: `user_id=neq.${userId}`,
+          filter: `room_id=eq.${roomId}`,
         },
         (payload) => {
-          console.log("new payload:", payload);
-          const { id } = payload.new.id;
-          const { x, y, width, height } = payload.new.data;
-          const newShape = getOrCreateShape(
-            payload.new.type,
-            x,
-            y,
-            width,
-            height
-          );
+          if (payload.new.user_id !== userId) {
+            console.log("new payload:", payload);
+            const { id } = payload.new.id;
+            const { x, y, width, height } = payload.new.data;
+            const newShape = getOrCreateShape(
+              payload.new.type,
+              x,
+              y,
+              width,
+              height
+            );
 
-          setExistingShapes((prev) => {
-            console.log("setting existing shape for new payload");
-            const newShapes = new Map(prev);
-            newShapes.set(id, newShape);
-            return newShapes;
-          });
+            console.log("existing shapes before new shape:", existingShapes);
+            setExistingShapes((prev) => {
+              const newShapes = new Map(prev);
+              newShapes.set(id, newShape);
+              return newShapes;
+            });
+            console.log("existing shapes after new shape:", existingShapes);
+          }
         }
       )
       .on(
@@ -172,6 +176,7 @@ export default function Canvas({
           event: "DELETE",
           schema: "public",
           table: "drawing_elements",
+          filter: `room_id=eq.${roomId}`,
         },
         (payload) => {
           console.log("delete payload:", payload);

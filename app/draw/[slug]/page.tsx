@@ -32,6 +32,8 @@ export default async function Page({ params }: PageProps) {
     notFound();
   }
 
+  console.log("roomId: ", room.id);
+
   // Your drawing page content here
   return (
     <div>
