@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import rough from "roughjs";
+import { Drawable } from "roughjs/bin/core";
 
 const supabase = createClient();
 
@@ -20,13 +21,9 @@ const generator = rough.generator({
 
 export type RoughShape = ReturnType<typeof generator.rectangle>;
 
-export type Shapes =
-  | "Square"
-  | "Circle"
-  | "Triangle"
-  | "Line"
-  | "ArrowedLine"
-  | "Eraser";
+export type Shapes = "Square" | "Circle" | "Triangle" | "Line" | "ArrowedLine";
+
+export type Tools = "Eraser" | "Panning" | Shapes;
 
 // used for both - getting the shape and creating the shape.
 export const getOrCreateShape = (
@@ -139,3 +136,54 @@ export const saveDrawingElementToDb = async (
     console.log("EXCEPTION: Error saving drawing element: ", error);
   }
 };
+
+// A function to check if a point is inside a shape's bounding box
+export const isPointInShape = (
+  x: number,
+  y: number,
+  shape: Drawable | Drawable[]
+): boolean => {
+  // This is a simplified check. For more accuracy, you might need a more complex
+  // intersection algorithm based on the shape type.
+  if (Array.isArray(shape)) {
+    return shape.some((s) => isPointInShape(x, y, s));
+  }
+
+  const { x1, y1, x2, y2 } = shape.sets[0].ops.reduce(
+    (acc, op) => {
+      if (op.op === "move" || op.op === "bcurveTo" || op.op === "lineTo") {
+        const points = op.data;
+        for (let i = 0; i < points.length; i += 2) {
+          acc.x1 = Math.min(acc.x1, points[i]);
+          acc.y1 = Math.min(acc.y1, points[i + 1]);
+          acc.x2 = Math.max(acc.x2, points[i]);
+          acc.y2 = Math.max(acc.y2, points[i + 1]);
+        }
+      }
+      return acc;
+    },
+    { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity }
+  );
+
+  console.log("x: ", x, "x2:", x2, "y:", y, "y2:", y2);
+  return x >= x1 && x <= x2 && y >= y1 && y <= y2;
+};
+
+// export const handleEraser = async (
+//   e: React.MouseEvent,
+//   setExistingShapes: React.Dispatch<
+//     SetStateAction<Map<string, Drawable | Drawable[]>>
+//   >
+// ) => {
+//   const { clientX, clientY } = e;
+//   setExistingShapes((prev) => {
+//     const newShapes = new Map(prev);
+//     newShapes.forEach(async (shape, id) => {
+//       if (isPointInShape(clientX, clientY, shape)) {
+//         newShapes.delete(id);
+//         await supabase.from("drawing_elements").delete().eq("id", id);
+//       }
+//     });
+//     return newShapes;
+//   });
+// };

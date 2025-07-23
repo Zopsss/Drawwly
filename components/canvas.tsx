@@ -1,6 +1,6 @@
 "use client";
 
-import { Shapes, getOrCreateShape } from "@/lib/canvas/canvas";
+import { Tools, getOrCreateShape } from "@/lib/canvas/canvas";
 import { createClient } from "@/lib/supabase/client";
 import { SupabaseClient } from "@supabase/supabase-js";
 
@@ -24,7 +24,7 @@ export default function Canvas({
 
   const [showCursorFollower, setShowCurosorFollower] = useState(false);
   const [supabase, setSupabase] = useState<SupabaseClient>();
-  const [selectedShape, setSelectedShape] = useState<Shapes>("Square");
+  const [selectedTool, setSelectedTool] = useState<Tools>("Square");
 
   const {
     existingShapes,
@@ -33,7 +33,7 @@ export default function Canvas({
     handleOnMouseDown,
     handleOnMouseMove,
     handleOnMouseUp,
-  } = useCanvasDrawings(selectedShape, supabase, roomId, userId);
+  } = useCanvasDrawings(selectedTool, supabase, roomId, userId);
 
   // ------------------ useEffects starts from here ------------------
 
@@ -113,6 +113,7 @@ export default function Canvas({
     if (!canvas || !ctx || !roughCanvas) return;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    console.log("existing shapes changed...");
 
     existingShapes.forEach((shape) => {
       if (!Array.isArray(shape)) {
@@ -135,28 +136,54 @@ export default function Canvas({
     // if roomId is not provided then it means guest user is drawing so we dont need this useEffect.
     if (!supabase || !roomId) return;
 
-    const channel = supabase.channel(`drawing-elements-${roomId}`).on(
-      "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "drawing_elements",
-        filter: `user_id=neq.${userId}`,
-      },
-      (payload) => {
-        const { id } = payload.new.id;
-        const { x, y, width, height } = payload.new.data;
-        const newShape = getOrCreateShape(
-          payload.new.type,
-          x,
-          y,
-          width,
-          height
-        );
+    const channel = supabase
+      .channel(`drawing-elements-${roomId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "drawing_elements",
+          filter: `user_id=neq.${userId}`,
+        },
+        (payload) => {
+          console.log("new payload:", payload);
+          const { id } = payload.new.id;
+          const { x, y, width, height } = payload.new.data;
+          const newShape = getOrCreateShape(
+            payload.new.type,
+            x,
+            y,
+            width,
+            height
+          );
 
-        setExistingShapes((prev) => prev.set(id, newShape));
-      }
-    );
+          setExistingShapes((prev) => {
+            console.log("setting existing shape for new payload");
+            const newShapes = new Map(prev);
+            newShapes.set(id, newShape);
+            return newShapes;
+          });
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "DELETE",
+          schema: "public",
+          table: "drawing_elements",
+        },
+        (payload) => {
+          console.log("delete payload:", payload);
+
+          setExistingShapes((prev) => {
+            console.log("deleting existing shape for payload");
+            const newShapes = new Map(prev);
+            newShapes.delete(payload.old.id);
+            return newShapes;
+          });
+        }
+      );
 
     channel.subscribe();
 
@@ -168,8 +195,8 @@ export default function Canvas({
   return (
     <div>
       <ShapeToolbar
-        selectedShape={selectedShape}
-        setSelectedShape={setSelectedShape}
+        selectedTool={selectedTool}
+        setSelectedTool={setSelectedTool}
       />
       <canvas
         ref={canvasRef}
