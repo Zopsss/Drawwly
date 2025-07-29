@@ -2,6 +2,7 @@
 
 import { Shapes, Tools } from "@/lib/canvas/canvas";
 import {
+  ALargeSmall,
   Circle,
   Eraser,
   Hand,
@@ -19,6 +20,7 @@ const icons: { icon: JSX.Element; type: Shapes }[] = [
   { icon: <Triangle />, type: "Triangle" },
   { icon: <Minus />, type: "Line" },
   { icon: <MoveRight />, type: "ArrowedLine" },
+  { icon: <ALargeSmall />, type: "Text" },
 ];
 
 export default function ShapeToolbar({
