@@ -9,6 +9,7 @@ import {
   Minus,
   MousePointer,
   MoveRight,
+  Pencil,
   Square,
   Triangle,
 } from "lucide-react";
@@ -30,10 +31,6 @@ export default function ShapeToolbar({
   selectedTool: Tools;
   setSelectedTool: (shape: Tools) => void;
 }) {
-  const handleEraser = () => {
-    setSelectedTool("Eraser");
-  };
-
   return (
     <div className="flex fixed top-5 items-center justify-center w-full px-10 pointer-events-none">
       <div className="p-3 rounded-md drop-shadow-md bg-white flex items-center justify-between gap-10 pointer-events-auto">
@@ -54,10 +51,16 @@ export default function ShapeToolbar({
             </span>
           ))}
           <span
-            onClick={handleEraser}
+            onClick={() => setSelectedTool("Eraser")}
             className={`cursor-pointer p-1 rounded-md ${selectedTool === "Eraser" && "bg-purple-100"}`}
           >
             <Eraser />
+          </span>
+          <span
+            onClick={() => setSelectedTool("Pencil")}
+            className={`cursor-pointer p-1 rounded-md ${selectedTool === "Pencil" && "bg-purple-100"}`}
+          >
+            <Pencil />
           </span>
         </div>
       </div>

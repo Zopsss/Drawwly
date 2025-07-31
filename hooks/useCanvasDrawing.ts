@@ -4,15 +4,14 @@ import {
   detectElementsToDelete,
   saveCanvasElementToDb,
   Tools,
-  deleteElements,
+  isShapeTool,
+  TextElement,
+  PencilElement,
 } from "@/lib/canvas/canvas";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { setupFsCheck } from "next/dist/server/lib/router-utils/filesystem";
 import { useCallback, useState } from "react";
 import { Drawable } from "roughjs/bin/core";
-
-const isShape = (tool: Tools) => {
-  return tool !== "Eraser" && tool !== "Panning";
-};
 
 export default function useCanvasDrawings(
   ctx: CanvasRenderingContext2D | null,
@@ -33,6 +32,7 @@ export default function useCanvasDrawings(
     Map<string, CanvasElement>
   >(new Map());
   const [tempShape, setTempShape] = useState<Drawable[]>([]); // simplifying temp shape by always keeping it an array ( array is required for arrowed line ).
+  const [points, setPoints] = useState<number[][]>([]);
   const [startingPoint, setStartingPoint] = useState<{
     startX: number;
     startY: number;
@@ -47,14 +47,14 @@ export default function useCanvasDrawings(
         return;
       }
 
-      const newTextElement: Omit<CanvasElement, "shape"> = {
+      const newTextElement: TextElement = {
         type: "Text",
         x: typingConfig.x,
         y: typingConfig.y,
         width,
         height,
-        text: {
-          content: text.trim(),
+        content: text.trim(),
+        options: {
           lineHeight,
           size: "md",
           alignment: "Left",
@@ -121,52 +121,95 @@ export default function useCanvasDrawings(
     async (e: React.MouseEvent) => {
       if (!isDrawing || !startingPoint || !supabase) return;
 
-      if (isShape(selectedTool) && selectedTool !== "Text") {
-        const { startX, startY } = startingPoint;
+      let shapeId = Date.now().toString();
+      switch (selectedTool) {
+        case "ArrowedLine":
+        case "Circle":
+        case "Line":
+        case "Square":
+        case "Triangle":
+          const { startX, startY } = startingPoint;
 
-        const endX = e.clientX;
-        const endY = e.clientY;
+          const endX = e.clientX;
+          const endY = e.clientY;
 
-        const width = endX - startX;
-        const height = endY - startY;
+          const width = endX - startX;
+          const height = endY - startY;
 
-        // the main Drawable shape, which is used to draw shape on canvas
-        const drawableShape = getOrCreateShape(
-          selectedTool,
-          startX,
-          startY,
-          width,
-          height
-        );
-
-        // an extra shape, which stores metadata of the shape. Used when updating the shape, we can directly get its coordinates and other options.
-        const shapeWithMetadata = {
-          type: selectedTool,
-          x: startX,
-          y: startY,
-          width,
-          height,
-          shape: drawableShape,
-        };
-
-        let shapeId = Date.now().toString();
-        if (roomId && userId) {
-          shapeId = await saveCanvasElementToDb(
-            shapeWithMetadata,
-            roomId,
-            userId
+          // the main Drawable shape, which is used to draw shape on canvas
+          const drawableShape = getOrCreateShape(
+            selectedTool,
+            startX,
+            startY,
+            width,
+            height
           );
-        }
 
-        setExistingShapes((prev) =>
-          new Map(prev).set(shapeId, shapeWithMetadata)
-        );
+          const finalShape = {
+            type: selectedTool,
+            x: startX,
+            y: startY,
+            width,
+            height,
+            shape: drawableShape,
+          };
 
-        setTempShape([]);
-      } else if (selectedTool === "Eraser") {
-        deleteElements(elementsToDelete, setExistingShapes, roomId, supabase);
+          if (roomId && userId) {
+            shapeId = await saveCanvasElementToDb(finalShape, roomId, userId);
+          }
+
+          setExistingShapes((prev) => new Map(prev).set(shapeId, finalShape));
+          break;
+
+        case "Eraser":
+          if (roomId && supabase) {
+            await supabase
+              .from("drawing_elements")
+              .delete()
+              .in("id", Array.from(elementsToDelete.keys()));
+          }
+
+          setExistingShapes((prev) => {
+            const newShapes = new Map(prev);
+            elementsToDelete.forEach((ele, id) => {
+              newShapes.delete(id);
+            });
+            return newShapes;
+          });
+          break;
+
+        case "Pencil":
+          const pencil: PencilElement = {
+            type: "Pencil",
+            points,
+            width: 0,
+            height: 0,
+            x: 0,
+            y: 0,
+            options: {
+              size: 10,
+              thinning: 0.5,
+              smoothing: 0.5,
+              streamline: 0.5,
+            },
+          };
+          if (roomId && userId) {
+            shapeId = await saveCanvasElementToDb(pencil, roomId, userId);
+          }
+
+          setExistingShapes((prev) => new Map(prev).set(shapeId, pencil));
+          setPoints([]);
+          break;
+
+        // no need to do anything for case "Text"
+        case "Text":
+          break;
+
+        default:
+          throw new Error("Invalid element in handleOnMouseUp");
       }
 
+      setTempShape([]);
       setIsDrawing(false);
       setStartingPoint(null);
       setElementsToDelete(new Map()); // clear the set
@@ -179,6 +222,7 @@ export default function useCanvasDrawings(
       roomId,
       userId,
       elementsToDelete,
+      points,
     ]
   );
 
@@ -186,7 +230,7 @@ export default function useCanvasDrawings(
     (e: React.MouseEvent) => {
       if (!isDrawing || !startingPoint) return;
 
-      if (isShape(selectedTool) && selectedTool !== "Text") {
+      if (isShapeTool(selectedTool)) {
         const { startX, startY } = startingPoint;
         const currentX = e.clientX;
         const currentY = e.clientY;
@@ -211,14 +255,27 @@ export default function useCanvasDrawings(
           elementsToDelete,
           setElementsToDelete
         );
+      } else if (selectedTool === "Pencil") {
+        // following condition was taken from docs...
+        if (e.buttons !== 1) return;
+
+        setPoints((prev) => [...prev, [e.pageX, e.pageY]]);
       }
     },
-    [selectedTool, isDrawing, startingPoint, existingShapes, elementsToDelete]
+    [
+      selectedTool,
+      isDrawing,
+      startingPoint,
+      existingShapes,
+      elementsToDelete,
+      points,
+    ]
   );
 
   return {
     existingShapes,
     setExistingShapes,
+    points,
     tempShape,
     elementsToDelete,
     typingConfig,

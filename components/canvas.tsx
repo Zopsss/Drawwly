@@ -5,6 +5,7 @@ import {
   Tools,
   renderElementOnCanvas,
   getOrCreateShape,
+  getSvgPathFromStroke,
 } from "@/lib/canvas/canvas";
 import { createClient } from "@/lib/supabase/client";
 import { SupabaseClient } from "@supabase/supabase-js";
@@ -15,6 +16,7 @@ import rough from "roughjs";
 import { CursorFollower } from "./cursor-follower";
 import ShapeToolbar from "./ui/shape-toolbar";
 import useCanvasDrawings from "@/hooks/useCanvasDrawing";
+import getStroke from "perfect-freehand";
 
 export default function Canvas({
   roomId,
@@ -37,6 +39,7 @@ export default function Canvas({
   const {
     existingShapes,
     setExistingShapes,
+    points,
     tempShape,
     elementsToDelete,
     typingConfig,
@@ -146,13 +149,39 @@ export default function Canvas({
           const shapesMap = new Map<string, CanvasElement>();
           data.map((element) => {
             const { type, data, id } = element;
-            const { x, y, width, height, text } = data;
+            const { x, y, width, height, content, points, options } = data;
 
-            if (type !== "Text") {
+            // for shapes
+            if (type !== "Text" && type !== "Pencil") {
               const shape = getOrCreateShape(type, x, y, width, height);
-              shapesMap.set(id, { type, x, y, width, height, shape });
-            } else {
-              shapesMap.set(id, { type, x, y, width, height, text });
+              shapesMap.set(id, {
+                type,
+                x,
+                y,
+                width,
+                height,
+                shape,
+              });
+            } else if (type === "Text") {
+              shapesMap.set(id, {
+                type,
+                x,
+                y,
+                width,
+                height,
+                content,
+                options,
+              });
+            } else if (type === "Pencil") {
+              shapesMap.set(id, {
+                type,
+                x,
+                y,
+                width,
+                height,
+                points,
+                options,
+              });
             }
           });
 
@@ -191,7 +220,22 @@ export default function Canvas({
     tempShape.forEach((shape) => {
       roughCanvas.draw(shape);
     });
-  }, [existingShapes, tempShape, elementsToDelete, ctx, fontLoaded]);
+
+    if (points.length > 1) {
+      const stroke = getStroke(points, {
+        size: 10,
+        thinning: 0.5,
+        smoothing: 0.5,
+        streamline: 0.5,
+      });
+
+      const pathData = getSvgPathFromStroke(stroke);
+
+      const myPath = new Path2D(pathData);
+
+      ctx.fill(myPath);
+    }
+  }, [existingShapes, tempShape, elementsToDelete, ctx, fontLoaded, points]);
 
   // Handling new shapes created by other users
   useEffect(() => {
@@ -214,16 +258,40 @@ export default function Canvas({
           }
 
           const { id, type, data } = payload.new;
-          const { x, y, width, height, text } = data;
+          const { x, y, width, height, content, points, options } = data;
 
           setExistingShapes((prevShapes) => {
             const newShapes = new Map(prevShapes);
-            if (type !== "Text") {
+            if (type !== "Text" && type !== "Pencil") {
               const newShape = getOrCreateShape(type, x, y, width, height);
-              newShapes.set(id, { type, x, y, width, height, shape: newShape });
-            } else {
-              console.log(text);
-              newShapes.set(id, { type, x, y, width, height, text });
+              newShapes.set(id, {
+                type,
+                x,
+                y,
+                width,
+                height,
+                shape: newShape,
+              });
+            } else if (type === "Text") {
+              newShapes.set(id, {
+                type,
+                x,
+                y,
+                width,
+                height,
+                options,
+                content,
+              });
+            } else if (type === "Pencil") {
+              newShapes.set(id, {
+                type,
+                x,
+                y,
+                width,
+                height,
+                points,
+                options,
+              });
             }
             return newShapes;
           });

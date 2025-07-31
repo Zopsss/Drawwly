@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
-import { SupabaseClient } from "@supabase/supabase-js";
+import getStroke, { StrokeOptions } from "perfect-freehand";
 import { Dispatch, SetStateAction } from "react";
 import rough from "roughjs";
 import { RoughCanvas } from "roughjs/bin/canvas";
@@ -15,30 +15,49 @@ export type Shapes =
   | "Triangle"
   | "Line"
   | "ArrowedLine"
-  | "Text";
+  | "Text"
+  | "Pencil";
 
-export type Tools = "Eraser" | "Panning" | Shapes;
+export type Tools = "Eraser" | Shapes;
+
+// Currently we're manually specifying the non shape tools that we want to use.
+// TODO: Find a better way to automatically include all the non shape tools instead of manually defining them.
+const NonShapeTools: Exclude<Tools, Shapes>[] = ["Eraser"];
 
 type TextAlignment = "Left" | "Center" | "Right";
 type TextSize = "sm" | "md" | "lg" | "xl";
 type TextFontFamily = "Excalifont";
 
-export interface TextElement {
-  content: string;
-  lineHeight: number;
-  alignment: TextAlignment;
-  size: TextSize;
-  fontFamily: TextFontFamily;
-}
-export interface CanvasElement {
-  type: Shapes;
+interface CommonFields {
   x: number;
   y: number;
   width: number;
   height: number;
-  shape?: Drawable | Drawable[];
-  text?: TextElement;
 }
+
+export interface TextElement extends CommonFields {
+  type: "Text";
+  content: string;
+  options: {
+    lineHeight: number;
+    alignment: TextAlignment;
+    size: TextSize;
+    fontFamily: TextFontFamily;
+  };
+}
+
+export interface ShapeElement extends CommonFields {
+  type: Exclude<Shapes, "Pencil" | "Text">;
+  shape: Drawable | Drawable[];
+}
+
+export interface PencilElement extends CommonFields {
+  type: "Pencil";
+  points: number[][];
+  options: StrokeOptions;
+}
+
+export type CanvasElement = ShapeElement | TextElement | PencilElement;
 
 // ================== Constants ==================
 
@@ -122,7 +141,7 @@ const distanceToLineSegment = (
  * @param element element to check
  * @returns true if cursor is on an element, false otherwise
  */
-const isPointOnCanvasElement = (
+const isCursorOnCanvasElement = (
   cursorX: number,
   cursorY: number,
   element: CanvasElement
@@ -142,6 +161,7 @@ const isPointOnCanvasElement = (
       );
       return dist <= ERASER_TOLERANCE;
     }
+
     case "Square": {
       const topLeft = { x, y };
       const topRight = { x: x + width, y };
@@ -187,6 +207,7 @@ const isPointOnCanvasElement = (
 
       return onTop || onRight || onBottom || onLeft;
     }
+
     case "Triangle": {
       const p1 = { x: x + width / 2, y };
       const p2 = { x, y: y + height };
@@ -204,6 +225,7 @@ const isPointOnCanvasElement = (
 
       return onSide1 || onSide2 || onSide3;
     }
+
     case "Circle": {
       const centerX = x + width / 2;
       const centerY = y + height / 2;
@@ -217,6 +239,7 @@ const isPointOnCanvasElement = (
       // Check if the distance to the center is within the tolerance range of the radius
       return Math.abs(distToCenter - radius) <= ERASER_TOLERANCE;
     }
+
     case "Text": {
       const { x, y, width, height } = element;
 
@@ -227,12 +250,73 @@ const isPointOnCanvasElement = (
         cursorY <= height + y
       );
     }
+
+    case "Pencil": {
+      const { points } = element as PencilElement;
+      // Check distance to each segment of the stroke
+      for (let i = 0; i < points.length - 1; i++) {
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const distance = distanceToLineSegment(
+          cursorX,
+          cursorY,
+          p1[0],
+          p1[1],
+          p2[0],
+          p2[1]
+        );
+        if (distance <= ERASER_TOLERANCE) {
+          return true; // Cursor is on the path
+        }
+      }
+      return false;
+    }
     default:
       return false;
   }
 };
 
+const insertElementInDb = async (
+  room_id: string,
+  user_id: string,
+  type: string,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+  additionalData?: Record<string, unknown> // using record instead of "{}" because got this build error:
+  // Error: The `{}` ("empty object") type allows any non-nullish value, including literals like `0` and `""`.
+) => {
+  const { error, data } = await SUPABASE.from("drawing_elements")
+    .insert({
+      room_id,
+      user_id,
+      type,
+      data: {
+        width,
+        height,
+        x,
+        y,
+        ...additionalData,
+      },
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    throw new Error("Error saving drawing element", error);
+  }
+
+  return data?.id;
+};
+
 // ================== Main Exports ==================
+
+export const isShapeTool = (tool: Tools): tool is Shapes => {
+  return (
+    !NonShapeTools.includes(tool as Exclude<Tools, Shapes>) && tool !== "Pencil"
+  );
+};
 
 export const getOrCreateShape = (
   type: Shapes,
@@ -321,75 +405,119 @@ export const getOrCreateShape = (
 };
 
 export const saveCanvasElementToDb = async (
-  element: Omit<CanvasElement, "shape">,
+  elementToSave: CanvasElement,
   room_id: string,
   user_id: string
 ) => {
   try {
-    const { x, y, width, height, type, text } = element;
-    const { error, data } = await SUPABASE.from("drawing_elements")
-      .insert({
-        room_id,
-        user_id,
-        type,
-        data: {
-          x,
-          y,
+    const { x, y, width, height, type } = elementToSave;
+
+    switch (type) {
+      case "Circle":
+      case "Square":
+      case "Triangle":
+      case "ArrowedLine":
+      case "Line":
+        return await insertElementInDb(
+          room_id,
+          user_id,
+          type,
           width,
           height,
-          text,
-        },
-      })
-      .select("id")
-      .single();
+          x,
+          y
+        );
 
-    if (error) {
-      throw new Error("Error saving drawing element", error);
+      case "Text": {
+        const { content, options } = elementToSave as TextElement;
+        return await insertElementInDb(
+          room_id,
+          user_id,
+          type,
+          width,
+          height,
+          x,
+          y,
+          { content, options }
+        );
+      }
+
+      case "Pencil": {
+        const { points, options } = elementToSave as PencilElement;
+        return await insertElementInDb(room_id, user_id, type, 0, 0, 0, 0, {
+          points,
+          options,
+        });
+      }
+
+      default:
+        throw new Error("Invalid element type while saving in db.");
     }
-
-    return data?.id;
   } catch (error) {
-    throw new Error("Error saving drawing element" + error);
+    throw new Error("Error saving drawing element: " + error);
   }
 };
 
 export const renderElementOnCanvas = (
-  element: CanvasElement & { translucent?: boolean },
+  canvasElement: CanvasElement & { translucent?: boolean },
   roughCanvas: RoughCanvas,
   ctx: CanvasRenderingContext2D
 ) => {
   ctx.save();
 
   // if element is about to be deleted then decrease its opacity.
-  if (element.translucent) ctx.globalAlpha = 0.5;
+  if (canvasElement.translucent) ctx.globalAlpha = 0.5;
 
-  if (element.shape) {
-    const shape = element.shape;
-    if (!Array.isArray(shape)) {
-      // for normal shapes
-      roughCanvas.draw(shape);
-    } else {
-      // for ArrowedLine
-      shape.forEach((shape) => {
+  switch (canvasElement.type) {
+    case "Circle":
+    case "Line":
+    case "Square":
+    case "Triangle":
+    case "ArrowedLine":
+      const shapeElement = canvasElement as unknown as ShapeElement;
+      const shape = shapeElement.shape;
+      if (!Array.isArray(shape)) {
+        // for normal shapes
         roughCanvas.draw(shape);
-      });
-    }
-  } else if (element.text) {
-    ctx.font = "24px Excalifont";
-    ctx.textBaseline = "top";
-    ctx.fillStyle = "black";
-    ctx.textRendering = "optimizeLegibility";
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    const lines = element.text.content.split("\n");
+      } else {
+        // for ArrowedLine
+        shape.forEach((shape) => {
+          roughCanvas.draw(shape);
+        });
+      }
+      break;
+    case "Text":
+      const textElement = canvasElement as unknown as TextElement;
 
-    lines.forEach((line, index) => {
-      ctx.fillText(
-        line,
-        element.x,
-        element.y + index * element.text!.lineHeight
-      );
-    });
+      ctx.font = "24px Excalifont";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = "black";
+      ctx.textRendering = "optimizeLegibility";
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      const lines = textElement.content.split("\n");
+
+      lines.forEach((line, index) => {
+        ctx.fillText(
+          line,
+          canvasElement.x,
+          canvasElement.y + index * canvasElement.options.lineHeight
+        );
+      });
+      break;
+    case "Pencil":
+      const { points, options } = canvasElement as unknown as PencilElement;
+      const stroke = getStroke(points, options);
+
+      const pathData = getSvgPathFromStroke(stroke);
+
+      const myPath = new Path2D(pathData);
+
+      ctx.fill(myPath);
+      break;
+
+    default:
+      break;
   }
 
   ctx.restore();
@@ -410,29 +538,35 @@ export const detectElementsToDelete = (
 
   existingShapes.forEach((element, id) => {
     if (
-      isPointOnCanvasElement(clientX, clientY, element) &&
+      isCursorOnCanvasElement(clientX, clientY, element) &&
       !elementsToDelete.has(id)
     ) {
-      if (element.type !== "Text") {
+      const { type, height, width, x, y } = element;
+
+      if (element.type !== "Text" && element.type !== "Pencil") {
         const translucentShape = getOrCreateShape(
-          element.type,
-          element.x,
-          element.y,
-          element.width,
-          element.height,
+          type,
+          x,
+          y,
+          width,
+          height,
           DELETION_STROKE_STYLE
         );
 
-        newElementsToDelete.set(id, {
+        const shapeElement: ShapeElement & { translucent: boolean } = {
           ...element,
           shape: translucentShape,
           translucent: true,
-        });
-      } else if (element.type === "Text" && element.text) {
+        };
+
+        newElementsToDelete.set(id, shapeElement);
+      } else if (type === "Text" || type === "Pencil") {
         newElementsToDelete.set(id, {
           ...element,
           translucent: true,
         });
+      } else {
+        throw new Error("Invalid shape type in detectElementsToDelete");
       }
       changed = true;
     }
@@ -443,24 +577,38 @@ export const detectElementsToDelete = (
   }
 };
 
-export const deleteElements = async (
-  elementsToDelete: Map<string, CanvasElement>,
-  setExistingShapes: Dispatch<SetStateAction<Map<string, CanvasElement>>>,
-  roomId: string | undefined,
-  supabase: SupabaseClient | undefined
-) => {
-  if (roomId && supabase) {
-    await supabase
-      .from("drawing_elements")
-      .delete()
-      .in("id", Array.from(elementsToDelete.keys()));
+// from https://www.npmjs.com/package/perfect-freehand#rendering
+const average = (a: number, b: number) => (a + b) / 2;
+
+export const getSvgPathFromStroke = (points: number[][], closed = true) => {
+  const len = points.length;
+
+  if (len < 4) {
+    return ``;
   }
 
-  setExistingShapes((prev) => {
-    const newShapes = new Map(prev);
-    elementsToDelete.forEach((ele, id) => {
-      newShapes.delete(id);
-    });
-    return newShapes;
-  });
+  let a = points[0];
+  let b = points[1];
+  const c = points[2];
+
+  let result = `M${a[0].toFixed(2)},${a[1].toFixed(2)} Q${b[0].toFixed(
+    2
+  )},${b[1].toFixed(2)} ${average(b[0], c[0]).toFixed(2)},${average(
+    b[1],
+    c[1]
+  ).toFixed(2)} T`;
+
+  for (let i = 2, max = len - 1; i < max; i++) {
+    a = points[i];
+    b = points[i + 1];
+    result += `${average(a[0], b[0]).toFixed(2)},${average(a[1], b[1]).toFixed(
+      2
+    )} `;
+  }
+
+  if (closed) {
+    result += "Z";
+  }
+
+  return result;
 };
