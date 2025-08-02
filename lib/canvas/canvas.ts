@@ -529,16 +529,19 @@ export const detectElementsToDelete = (
   elementsToDelete: Map<string, CanvasElement & { translucent: boolean }>,
   setElementsToDelete: Dispatch<
     SetStateAction<Map<string, CanvasElement & { translucent: boolean }>>
-  >
+  >,
+  zoom: number,
+  panOffset: { x: number; y: number }
 ) => {
-  const { clientX, clientY } = e;
+  const worldX = (e.pageX - panOffset.x) / zoom;
+  const worldY = (e.pageY - panOffset.y) / zoom;
 
   let changed = false;
   const newElementsToDelete = new Map(elementsToDelete);
 
   existingShapes.forEach((element, id) => {
     if (
-      isCursorOnCanvasElement(clientX, clientY, element) &&
+      isCursorOnCanvasElement(worldX, worldY, element) &&
       !elementsToDelete.has(id)
     ) {
       const { type, height, width, x, y } = element;

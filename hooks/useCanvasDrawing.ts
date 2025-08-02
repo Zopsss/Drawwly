@@ -9,11 +9,12 @@ import {
   PencilElement,
 } from "@/lib/canvas/canvas";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { setupFsCheck } from "next/dist/server/lib/router-utils/filesystem";
 import { useCallback, useState } from "react";
 import { Drawable } from "roughjs/bin/core";
 
 export default function useCanvasDrawings(
+  zoom: number,
+  panOffset: { x: number; y: number },
   ctx: CanvasRenderingContext2D | null,
   selectedTool: Tools,
   supabase: SupabaseClient | undefined,
@@ -37,6 +38,17 @@ export default function useCanvasDrawings(
     startX: number;
     startY: number;
   } | null>(null);
+
+  const getWorldCoordinates = useCallback(
+    (event: React.MouseEvent) => {
+      if (!ctx) return { worldX: 0, worldY: 0 };
+      // The formula: world = (screen) / zoom
+      const worldX = (event.pageX - panOffset.x) / zoom;
+      const worldY = (event.pageY - panOffset.y) / zoom;
+      return { worldX, worldY };
+    },
+    [ctx, zoom, panOffset]
+  );
 
   const handleTextareaBlur = useCallback(
     async (text: string, width: number, height: number, lineHeight: number) => {
@@ -81,7 +93,6 @@ export default function useCanvasDrawings(
 
   const resizeTextarea = useCallback((textarea: HTMLTextAreaElement) => {
     if (textarea) {
-      // Measure width using Canvas API
       const lines = textarea.value.split("\n");
 
       textarea.style.height = "auto";
@@ -103,23 +114,27 @@ export default function useCanvasDrawings(
 
   const handleOnMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      const { worldX, worldY } = getWorldCoordinates(e);
+
       if (selectedTool !== "Text") {
-        setStartingPoint({ startX: e.clientX, startY: e.clientY });
+        setStartingPoint({ startX: worldX, startY: worldY });
         setIsDrawing(true);
         setTypingConfig(null);
       } else {
         if (!ctx || typingConfig) return;
 
-        setTypingConfig({ x: e.clientX, y: e.clientY });
+        setTypingConfig({ x: worldX, y: worldY });
         setIsDrawing(false);
       }
     },
-    [selectedTool, typingConfig, ctx]
+    [selectedTool, typingConfig, ctx, getWorldCoordinates]
   );
 
   const handleOnMouseUp = useCallback(
     async (e: React.MouseEvent) => {
       if (!isDrawing || !startingPoint || !supabase) return;
+
+      const { worldX, worldY } = getWorldCoordinates(e);
 
       let shapeId = Date.now().toString();
       switch (selectedTool) {
@@ -130,8 +145,8 @@ export default function useCanvasDrawings(
         case "Triangle":
           const { startX, startY } = startingPoint;
 
-          const endX = e.clientX;
-          const endY = e.clientY;
+          const endX = worldX;
+          const endY = worldY;
 
           const width = endX - startX;
           const height = endY - startY;
@@ -223,6 +238,7 @@ export default function useCanvasDrawings(
       userId,
       elementsToDelete,
       points,
+      getWorldCoordinates,
     ]
   );
 
@@ -230,10 +246,12 @@ export default function useCanvasDrawings(
     (e: React.MouseEvent) => {
       if (!isDrawing || !startingPoint) return;
 
+      const { worldX, worldY } = getWorldCoordinates(e);
+
       if (isShapeTool(selectedTool)) {
         const { startX, startY } = startingPoint;
-        const currentX = e.clientX;
-        const currentY = e.clientY;
+        const currentX = worldX;
+        const currentY = worldY;
 
         const width = currentX - startX;
         const height = currentY - startY;
@@ -253,13 +271,15 @@ export default function useCanvasDrawings(
           e,
           existingShapes,
           elementsToDelete,
-          setElementsToDelete
+          setElementsToDelete,
+          zoom,
+          panOffset
         );
       } else if (selectedTool === "Pencil") {
-        // following condition was taken from docs...
+        // following code was taken from docs...
         if (e.buttons !== 1) return;
 
-        setPoints((prev) => [...prev, [e.pageX, e.pageY]]);
+        setPoints((prev) => [...prev, [worldX, worldY]]);
       }
     },
     [
@@ -268,7 +288,9 @@ export default function useCanvasDrawings(
       startingPoint,
       existingShapes,
       elementsToDelete,
-      points,
+      zoom,
+      panOffset,
+      getWorldCoordinates,
     ]
   );
 

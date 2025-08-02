@@ -31,7 +31,7 @@ export function CursorFollower() {
     // Select interactive elements. Make sure your interactive elements are actually reachable by the mouse.
     // For elements like div, you might need to add tabindex="0" or make them focusable/clickable.
     const interactiveElements = document.querySelectorAll(
-      "a, button, img, input, textarea, select",
+      "a, button, img, input, textarea, select"
     );
     interactiveElements.forEach((element) => {
       element.addEventListener("mouseenter", handleMouseEnter);
@@ -47,23 +47,23 @@ export function CursorFollower() {
       dotPosition.current.x = lerp(
         dotPosition.current.x,
         mousePosition.current.x,
-        DOT_SMOOTHNESS,
+        DOT_SMOOTHNESS
       );
       dotPosition.current.y = lerp(
         dotPosition.current.y,
         mousePosition.current.y,
-        DOT_SMOOTHNESS,
+        DOT_SMOOTHNESS
       );
 
       borderDotPosition.current.x = lerp(
         borderDotPosition.current.x,
         mousePosition.current.x,
-        BORDER_DOT_SMOOTHNESS,
+        BORDER_DOT_SMOOTHNESS
       );
       borderDotPosition.current.y = lerp(
         borderDotPosition.current.y,
         mousePosition.current.y,
-        BORDER_DOT_SMOOTHNESS,
+        BORDER_DOT_SMOOTHNESS
       );
 
       setRenderPos({

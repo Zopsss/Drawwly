@@ -10,13 +10,15 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { SupabaseClient } from "@supabase/supabase-js";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import rough from "roughjs";
 
 import { CursorFollower } from "./cursor-follower";
 import ShapeToolbar from "./ui/shape-toolbar";
 import useCanvasDrawings from "@/hooks/useCanvasDrawing";
 import getStroke from "perfect-freehand";
+import ZoomButtons from "./zoom-buttons";
+import Textarea from "./textarea";
 
 export default function Canvas({
   roomId,
@@ -30,11 +32,13 @@ export default function Canvas({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [textValue, setTextValue] = useState("");
+  const [zoom, setZoom] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [fontLoaded, setFontLoaded] = useState(false);
   const [showCursorFollower, setShowCurosorFollower] = useState(false);
   const [supabase, setSupabase] = useState<SupabaseClient>();
   const [selectedTool, setSelectedTool] = useState<Tools>("Square");
   const [ctx, setCtx] = useState<CanvasRenderingContext2D | null>(null);
-  const [fontLoaded, setFontLoaded] = useState(false);
 
   const {
     existingShapes,
@@ -48,7 +52,71 @@ export default function Canvas({
     handleOnMouseUp,
     handleTextareaBlur,
     resizeTextarea,
-  } = useCanvasDrawings(ctx, selectedTool, supabase, roomId, userId);
+  } = useCanvasDrawings(
+    zoom,
+    panOffset,
+    ctx,
+    selectedTool,
+    supabase,
+    roomId,
+    userId
+  );
+
+  const handleZoom = useCallback(
+    (
+      delta: number,
+      zoomOrigin = { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+    ) => {
+      const newZoom = Math.max(0.1, Math.min(20, zoom + delta));
+
+      // Calculate the world point under the cursor before zoom
+      const worldPoint = {
+        x: (zoomOrigin.x - panOffset.x) / zoom,
+        y: (zoomOrigin.y - panOffset.y) / zoom,
+      };
+
+      // Calculate new pan offset to keep the point under cursor
+      const newPanOffset = {
+        x: zoomOrigin.x - worldPoint.x * newZoom,
+        y: zoomOrigin.y - worldPoint.y * newZoom,
+      };
+
+      setZoom(newZoom);
+      setPanOffset(newPanOffset);
+    },
+    [zoom, panOffset]
+  );
+
+  const resetZoom = useCallback(() => {
+    setZoom(1);
+    setPanOffset({ x: 0, y: 0 });
+  }, []);
+
+  const handleWheel = useCallback(
+    (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+
+      // Handle both touchpad and mouse wheel with different sensitivity
+      let delta;
+      if (Math.abs(e.deltaY) < 10) {
+        // Touchpad - more sensitive
+        delta = -e.deltaY * 0.03;
+      } else {
+        // Mouse wheel - less sensitive
+        delta = -Math.sign(e.deltaY) * 0.3;
+      }
+
+      // Calculate coordinates using pageX/pageY to match the drawing coordinate system
+      const zoomOrigin = {
+        x: e.pageX,
+        y: e.pageY,
+      };
+
+      handleZoom(delta, zoomOrigin);
+    },
+    [handleZoom]
+  );
 
   // ------------------ useEffects starts from here ------------------
 
@@ -99,31 +167,29 @@ export default function Canvas({
       const ctx = canvas.getContext("2d")!;
       const dpr = window.devicePixelRatio || 1;
 
-      // Set the canvas size in CSS pixels
       canvas.style.width = window.innerWidth + "px";
       canvas.style.height = window.innerHeight + "px";
-
-      // Set the canvas size in actual pixels
       canvas.width = window.innerWidth * dpr;
       canvas.height = window.innerHeight * dpr;
-
-      // Scale the context to match the device pixel ratio
       ctx.scale(dpr, dpr);
 
-      // FIX: Re-trigger drawing on resize by creating a new Map instance.
-      // This guarantees a re-render because the object reference changes.
       setExistingShapes((prev) => new Map(prev));
     };
 
     updateCanvasSize();
 
-    rc.current = rough.canvas(canvasRef.current);
-
+    rc.current = rough.canvas(canvasRef.current!);
     window.addEventListener("resize", updateCanvasSize);
 
+    // Attach the memoized wheel event handler
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
+
     setShowCurosorFollower(true);
-    return () => window.removeEventListener("resize", updateCanvasSize);
-  }, [setExistingShapes, canvasRef]);
+    return () => {
+      window.removeEventListener("resize", updateCanvasSize);
+      canvas.removeEventListener("wheel", handleWheel);
+    };
+  }, [setExistingShapes, canvasRef, handleWheel]);
   // 👆🏻 adding setExistingShapes as a dependency just to satisfy the linter, it does not matter if we add it or not.
   // source: https://react.dev/reference/react/useState#setstate, ( The set function has a stable identity, so you will often see it omitted from Effect dependencies, but including it will not cause the Effect to fire. )
   // From legacy docs: https://legacy.reactjs.org/docs/hooks-reference.html#usestate ( React guarantees that setState function identity is stable and won’t change on re-renders. This is why it’s safe to omit from the useEffect or useCallback dependency list. )
@@ -206,8 +272,11 @@ export default function Canvas({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    ctx.save();
+    ctx.translate(panOffset.x, panOffset.y);
+    ctx.scale(zoom, zoom);
+
     existingShapes.forEach((element, id) => {
-      // skip if element is about to be deleted, we draw them separately below
       if (elementsToDelete.has(id)) return;
 
       renderElementOnCanvas(element, roughCanvas, ctx);
@@ -221,6 +290,7 @@ export default function Canvas({
       roughCanvas.draw(shape);
     });
 
+    // drawing freehand lines
     if (points.length > 1) {
       const stroke = getStroke(points, {
         size: 10,
@@ -235,7 +305,18 @@ export default function Canvas({
 
       ctx.fill(myPath);
     }
-  }, [existingShapes, tempShape, elementsToDelete, ctx, fontLoaded, points]);
+
+    ctx.restore();
+  }, [
+    existingShapes,
+    tempShape,
+    elementsToDelete,
+    ctx,
+    fontLoaded,
+    points,
+    zoom,
+    panOffset,
+  ]);
 
   // Handling new shapes created by other users
   useEffect(() => {
@@ -335,33 +416,15 @@ export default function Canvas({
         setSelectedTool={setSelectedTool}
       />
       {typingConfig && (
-        <textarea
-          ref={textareaRef}
-          rows={1}
-          className="absolute bg-transparent z-10 border-none outline-none resize-none"
-          style={{
-            top: `${typingConfig.y}px`,
-            left: `${typingConfig.x}px`,
-            fontSize: "24px",
-            fontFamily: "Excalifont, monospace",
-            overflow: "scroll",
-          }}
-          value={textValue}
-          onChange={(e) => {
-            setTextValue(e.target.value);
-            resizeTextarea(textareaRef.current!);
-          }}
-          onBlur={() => {
-            const width = textareaRef.current!.offsetWidth;
-            const height = textareaRef.current!.offsetHeight;
-            const computedStyle = getComputedStyle(textareaRef.current!);
-            const fontSize = parseFloat(computedStyle.fontSize);
-            const lineHeight =
-              parseFloat(computedStyle.lineHeight) || fontSize * 1.2;
-
-            handleTextareaBlur(textValue, width, height, lineHeight);
-            setTextValue(""); // Reset for next use
-          }}
+        <Textarea
+          textareaRef={textareaRef}
+          typingConfig={typingConfig}
+          zoom={zoom}
+          panOffset={panOffset}
+          textValue={textValue}
+          setTextValue={setTextValue}
+          resizeTextarea={resizeTextarea}
+          handleTextareaBlur={handleTextareaBlur}
         />
       )}
       <canvas
@@ -371,6 +434,7 @@ export default function Canvas({
         onMouseUp={handleOnMouseUp}
         onMouseMove={handleOnMouseMove}
       />
+      <ZoomButtons zoom={zoom} handleZoom={handleZoom} resetZoom={resetZoom} />
       {showCursorFollower && <CursorFollower />}
     </div>
   );
