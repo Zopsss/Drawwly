@@ -216,6 +216,10 @@ export default function useCanvasDrawings(
           setPoints([]);
           break;
 
+        // no need to do anything for case "Panning", we're handling it in its own hook
+        case "Panning":
+          break;
+
         // no need to do anything for case "Text"
         case "Text":
           break;
@@ -275,6 +279,7 @@ export default function useCanvasDrawings(
           zoom,
           panOffset
         );
+      } else if (selectedTool === "Panning") {
       } else if (selectedTool === "Pencil") {
         // following code was taken from docs...
         if (e.buttons !== 1) return;

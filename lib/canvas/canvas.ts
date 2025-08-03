@@ -18,7 +18,7 @@ export type Shapes =
   | "Text"
   | "Pencil";
 
-export type Tools = "Eraser" | Shapes;
+export type Tools = "Eraser" | "Panning" | Shapes;
 
 // Currently we're manually specifying the non shape tools that we want to use.
 // TODO: Find a better way to automatically include all the non shape tools instead of manually defining them.
@@ -314,7 +314,9 @@ const insertElementInDb = async (
 
 export const isShapeTool = (tool: Tools): tool is Shapes => {
   return (
-    !NonShapeTools.includes(tool as Exclude<Tools, Shapes>) && tool !== "Pencil"
+    !NonShapeTools.includes(tool as Exclude<Tools, Shapes>) &&
+    tool !== "Pencil" &&
+    tool !== "Panning"
   );
 };
 

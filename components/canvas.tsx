@@ -19,6 +19,7 @@ import useCanvasDrawings from "@/hooks/useCanvasDrawing";
 import getStroke from "perfect-freehand";
 import ZoomButtons from "./zoom-buttons";
 import Textarea from "./textarea";
+import useZoomAndPan from "@/hooks/useZoomAndPan";
 
 export default function Canvas({
   roomId,
@@ -36,9 +37,26 @@ export default function Canvas({
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const [fontLoaded, setFontLoaded] = useState(false);
   const [showCursorFollower, setShowCurosorFollower] = useState(false);
+  const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [supabase, setSupabase] = useState<SupabaseClient>();
   const [selectedTool, setSelectedTool] = useState<Tools>("Square");
   const [ctx, setCtx] = useState<CanvasRenderingContext2D | null>(null);
+
+  const {
+    isPanning,
+    handleMouseDown: handlePanMouseDown,
+    handleMouseMove: handlePanMouseMove,
+    handleMouseUp: handlePanMouseUp,
+    handleWheel,
+    handleZoom,
+  } = useZoomAndPan(
+    zoom,
+    setZoom,
+    panOffset,
+    setPanOffset,
+    isSpacePressed,
+    selectedTool
+  );
 
   const {
     existingShapes,
@@ -47,9 +65,9 @@ export default function Canvas({
     tempShape,
     elementsToDelete,
     typingConfig,
-    handleOnMouseDown,
-    handleOnMouseMove,
-    handleOnMouseUp,
+    handleOnMouseDown: handleDrawMouseDown,
+    handleOnMouseMove: handleDrawMouseMove,
+    handleOnMouseUp: handleDrawMouseUp,
     handleTextareaBlur,
     resizeTextarea,
   } = useCanvasDrawings(
@@ -62,61 +80,34 @@ export default function Canvas({
     userId
   );
 
-  const handleZoom = useCallback(
-    (
-      delta: number,
-      zoomOrigin = { x: window.innerWidth / 2, y: window.innerHeight / 2 }
-    ) => {
-      const newZoom = Math.max(0.1, Math.min(20, zoom + delta));
+  const handleOnMouseDown = (e: React.MouseEvent) => {
+    if (selectedTool === "Panning" || isSpacePressed) {
+      handlePanMouseDown(e);
+    } else {
+      handleDrawMouseDown(e);
+    }
+  };
 
-      // Calculate the world point under the cursor before zoom
-      const worldPoint = {
-        x: (zoomOrigin.x - panOffset.x) / zoom,
-        y: (zoomOrigin.y - panOffset.y) / zoom,
-      };
+  const handleOnMouseMove = (e: React.MouseEvent) => {
+    if (isPanning) {
+      handlePanMouseMove(e);
+    } else {
+      handleDrawMouseMove(e);
+    }
+  };
 
-      // Calculate new pan offset to keep the point under cursor
-      const newPanOffset = {
-        x: zoomOrigin.x - worldPoint.x * newZoom,
-        y: zoomOrigin.y - worldPoint.y * newZoom,
-      };
-
-      setZoom(newZoom);
-      setPanOffset(newPanOffset);
-    },
-    [zoom, panOffset]
-  );
+  const handleOnMouseUp = (e: React.MouseEvent) => {
+    if (isPanning) {
+      handlePanMouseUp();
+    } else {
+      handleDrawMouseUp(e);
+    }
+  };
 
   const resetZoom = useCallback(() => {
     setZoom(1);
     setPanOffset({ x: 0, y: 0 });
   }, []);
-
-  const handleWheel = useCallback(
-    (e: WheelEvent) => {
-      if (!e.ctrlKey) return;
-      e.preventDefault();
-
-      // Handle both touchpad and mouse wheel with different sensitivity
-      let delta;
-      if (Math.abs(e.deltaY) < 10) {
-        // Touchpad - more sensitive
-        delta = -e.deltaY * 0.03;
-      } else {
-        // Mouse wheel - less sensitive
-        delta = -Math.sign(e.deltaY) * 0.3;
-      }
-
-      // Calculate coordinates using pageX/pageY to match the drawing coordinate system
-      const zoomOrigin = {
-        x: e.pageX,
-        y: e.pageY,
-      };
-
-      handleZoom(delta, zoomOrigin);
-    },
-    [handleZoom]
-  );
 
   // ------------------ useEffects starts from here ------------------
 
@@ -139,6 +130,29 @@ export default function Canvas({
     };
 
     loadFont();
+  }, []);
+
+  // Handle spacebar press for panning
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === " ") {
+        setIsSpacePressed(true);
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === " ") {
+        setIsSpacePressed(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
   }, []);
 
   // setting textarea's font and rezing it
@@ -428,7 +442,13 @@ export default function Canvas({
         />
       )}
       <canvas
-        className="font-mono"
+        className={`font-mono ${
+          isPanning
+            ? "cursor-grabbing"
+            : selectedTool === "Panning"
+              ? "cursor-grab"
+              : ""
+        }`}
         ref={canvasRef}
         onMouseDown={handleOnMouseDown}
         onMouseUp={handleOnMouseUp}

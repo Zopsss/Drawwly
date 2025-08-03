@@ -35,7 +35,14 @@ export default function ShapeToolbar({
     <div className="flex fixed top-5 items-center justify-center w-full px-10 pointer-events-none">
       <div className="p-3 rounded-md drop-shadow-md bg-white flex items-center justify-between gap-10 pointer-events-auto">
         <div className="flex items-center justify-center gap-3">
-          <Hand className="cursor-pointer" />
+          <span
+            onClick={() => setSelectedTool("Panning")}
+            className={`cursor-pointer p-1 rounded-md ${
+              selectedTool === "Panning" && "bg-purple-100"
+            }`}
+          >
+            <Hand className="cursor-pointer" />
+          </span>
           <MousePointer className="cursor-pointer" />
         </div>
         <div className="flex items-center justify-center gap-3">
