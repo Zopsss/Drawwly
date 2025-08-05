@@ -7,6 +7,7 @@ import {
   isShapeTool,
   TextElement,
   PencilElement,
+  getBoundingBox,
 } from "@/lib/canvas/canvas";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback, useState } from "react";
@@ -194,13 +195,14 @@ export default function useCanvasDrawings(
           break;
 
         case "Pencil":
+          const { minX, minY, maxX, maxY } = getBoundingBox(points);
           const pencil: PencilElement = {
             type: "Pencil",
             points,
-            width: 0,
-            height: 0,
-            x: 0,
-            y: 0,
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY,
             options: {
               size: 10,
               thinning: 0.5,
@@ -280,6 +282,8 @@ export default function useCanvasDrawings(
           panOffset
         );
       } else if (selectedTool === "Panning") {
+      } else if (selectedTool === "Selection") {
+        // Selection tool is handled in its own hook
       } else if (selectedTool === "Pencil") {
         // following code was taken from docs...
         if (e.buttons !== 1) return;

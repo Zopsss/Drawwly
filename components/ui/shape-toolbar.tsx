@@ -43,7 +43,14 @@ export default function ShapeToolbar({
           >
             <Hand className="cursor-pointer" />
           </span>
-          <MousePointer className="cursor-pointer" />
+          <span
+            onClick={() => setSelectedTool("Selection")}
+            className={`cursor-pointer p-1 rounded-md ${
+              selectedTool === "Selection" && "bg-purple-100"
+            }`}
+          >
+            <MousePointer className="cursor-pointer" />
+          </span>
         </div>
         <div className="flex items-center justify-center gap-3">
           {icons.map((shape, _) => (

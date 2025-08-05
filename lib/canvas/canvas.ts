@@ -18,11 +18,11 @@ export type Shapes =
   | "Text"
   | "Pencil";
 
-export type Tools = "Eraser" | "Panning" | Shapes;
+export type Tools = "Eraser" | "Panning" | "Selection" | Shapes;
 
 // Currently we're manually specifying the non shape tools that we want to use.
 // TODO: Find a better way to automatically include all the non shape tools instead of manually defining them.
-const NonShapeTools: Exclude<Tools, Shapes>[] = ["Eraser"];
+const NonShapeTools: Exclude<Tools, Shapes>[] = ["Eraser", "Selection"];
 
 type TextAlignment = "Left" | "Center" | "Right";
 type TextSize = "sm" | "md" | "lg" | "xl";
@@ -94,7 +94,7 @@ const DELETION_STROKE_STYLE = {
  * @param y2 The line segment's end y.
  * @returns The shortest distance from the point to the line segment.
  */
-const distanceToLineSegment = (
+export const distanceToLineSegment = (
   x: number,
   y: number,
   x1: number,
@@ -141,7 +141,7 @@ const distanceToLineSegment = (
  * @param element element to check
  * @returns true if cursor is on an element, false otherwise
  */
-const isCursorOnCanvasElement = (
+export const isCursorOnCanvasElement = (
   cursorX: number,
   cursorY: number,
   element: CanvasElement
@@ -276,6 +276,72 @@ const isCursorOnCanvasElement = (
   }
 };
 
+/**
+ * Checks if a point is inside an element, which is different from being "on" an element's line.
+ * This is primarily used for the selection tool to detect clicks inside shapes.
+ *
+ * @param cursorX The cursor's x-coordinate.
+ * @param cursorY The cursor's y-coordinate.
+ * @param element The canvas element to check against.
+ * @returns `true` if the cursor is inside the element, `false` otherwise.
+ */
+export const isPointInsideElement = (
+  cursorX: number,
+  cursorY: number,
+  element: CanvasElement
+): boolean => {
+  const { type, x, y, width, height } = element;
+
+  switch (type) {
+    case "Square":
+    case "Triangle": // Using bounding box for triangle for simplicity in selection.
+    case "Text": {
+      const x1 = Math.min(x, x + width);
+      const x2 = Math.max(x, x + width);
+      const y1 = Math.min(y, y + height);
+      const y2 = Math.max(y, y + height);
+      return cursorX >= x1 && cursorX <= x2 && cursorY >= y1 && cursorY <= y2;
+    }
+
+    case "Circle": {
+      const centerX = x + width / 2;
+      const centerY = y + height / 2;
+      const radius = Math.abs(width) / 2;
+      const dist = Math.sqrt(
+        Math.pow(cursorX - centerX, 2) + Math.pow(cursorY - centerY, 2)
+      );
+      return dist <= radius;
+    }
+
+    // For lines and free-form drawings, "inside" is the same as being "on" the line.
+    case "Line":
+    case "ArrowedLine":
+    case "Pencil":
+      return isCursorOnCanvasElement(cursorX, cursorY, element);
+
+    default:
+      return false;
+  }
+};
+
+export const getBoundingBox = (points: number[][]) => {
+  if (points.length === 0) {
+    return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  }
+  let minX = points[0][0];
+  let minY = points[0][1];
+  let maxX = points[0][0];
+  let maxY = points[0][1];
+
+  for (const point of points) {
+    minX = Math.min(minX, point[0]);
+    minY = Math.min(minY, point[1]);
+    maxX = Math.max(maxX, point[0]);
+    maxY = Math.max(maxY, point[1]);
+  }
+  return { minX, minY, maxX, maxY };
+};
+
 const insertElementInDb = async (
   room_id: string,
   user_id: string,
@@ -316,7 +382,8 @@ export const isShapeTool = (tool: Tools): tool is Shapes => {
   return (
     !NonShapeTools.includes(tool as Exclude<Tools, Shapes>) &&
     tool !== "Pencil" &&
-    tool !== "Panning"
+    tool !== "Panning" &&
+    tool !== "Selection"
   );
 };
 
@@ -445,11 +512,21 @@ export const saveCanvasElementToDb = async (
       }
 
       case "Pencil": {
-        const { points, options } = elementToSave as PencilElement;
-        return await insertElementInDb(room_id, user_id, type, 0, 0, 0, 0, {
-          points,
-          options,
-        });
+        const { x, y, width, height, points, options } =
+          elementToSave as PencilElement;
+        return await insertElementInDb(
+          room_id,
+          user_id,
+          type,
+          width,
+          height,
+          x,
+          y,
+          {
+            points,
+            options,
+          }
+        );
       }
 
       default:
@@ -457,6 +534,36 @@ export const saveCanvasElementToDb = async (
     }
   } catch (error) {
     throw new Error("Error saving drawing element: " + error);
+  }
+};
+
+export const updateCanvasElementInDb = async (
+  elementToSave: CanvasElement,
+  elementId: string
+) => {
+  try {
+    const { x, y, width, height, type } = elementToSave;
+
+    let dataToUpdate: Record<string, unknown> = {
+      x,
+      y,
+      width,
+      height,
+    };
+
+    if (type === "Text") {
+      const { content, options } = elementToSave as TextElement;
+      dataToUpdate = { ...dataToUpdate, content, options };
+    } else if (type === "Pencil") {
+      const { points, options } = elementToSave as PencilElement;
+      dataToUpdate = { ...dataToUpdate, points, options };
+    }
+
+    await SUPABASE.from("drawing_elements")
+      .update({ data: dataToUpdate })
+      .eq("id", elementId);
+  } catch (error) {
+    console.log(error);
   }
 };
 

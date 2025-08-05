@@ -103,3 +103,75 @@ Please file feedback and issues over on the [Supabase GitHub org](https://github
 - [Next.js Subscription Payments Starter](https://github.com/vercel/nextjs-subscription-payments)
 - [Cookie-based Auth and the Next.js 13 App Router (free course)](https://youtube.com/playlist?list=PL5S4mPUpp4OtMhpnp93EFSo42iQ40XjbF)
 - [Supabase Auth and the Next.js App Router](https://github.com/supabase/supabase/tree/master/examples/auth/nextjs)
+
+# Drawwly
+
+A collaborative drawing application built with Next.js, TypeScript, and Supabase.
+
+## Features
+
+- **Real-time Collaboration**: Draw with others in real-time
+- **Multiple Drawing Tools**: Square, Circle, Triangle, Line, Arrowed Line, Text, and Pencil
+- **Shape Selection**: Select, move, resize, and delete shapes
+- **Zoom and Pan**: Navigate your canvas with zoom and pan controls
+- **Authentication**: User authentication with Supabase
+- **Responsive Design**: Works on desktop and mobile devices
+
+## Drawing Tools
+
+- **Square**: Draw rectangles
+- **Circle**: Draw circles
+- **Triangle**: Draw triangles
+- **Line**: Draw straight lines
+- **Arrowed Line**: Draw lines with arrowheads
+- **Text**: Add text to your canvas
+- **Pencil**: Freehand drawing
+- **Eraser**: Delete shapes by hovering over them
+- **Panning**: Move around the canvas (hold spacebar or use hand tool)
+- **Selection**: Select and manipulate shapes
+
+## Selection Feature
+
+The selection tool allows you to:
+
+1. **Select Shapes**: Click on any shape to select it
+2. **Move Shapes**: Click and drag on a selected shape to move it
+3. **Resize Shapes**: Use the corner handles to resize selected shapes
+4. **Delete Shapes**: Press Delete or Backspace to delete selected shapes
+5. **Visual Feedback**: Selected shapes show a blue dashed border with resize handles
+
+### How to Use Selection
+
+1. Click the mouse pointer icon in the toolbar to activate selection mode
+2. Hover over any shape - the cursor will change to indicate interactivity
+3. Click on a shape to select it - a blue dashed border will appear
+4. Drag the shape to move it, or drag the corner handles to resize it
+5. Press Delete or Backspace to delete the selected shape
+6. Click on empty space to deselect
+
+## Getting Started
+
+1. Clone the repository
+2. Install dependencies: `npm install`
+3. Set up your Supabase project and add environment variables
+4. Run the development server: `npm run dev`
+5. Open [http://localhost:3000](http://localhost:3000) in your browser
+
+## Environment Variables
+
+Create a `.env.local` file with your Supabase credentials:
+
+```
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+```
+
+## Technologies Used
+
+- Next.js 14
+- TypeScript
+- Supabase
+- Tailwind CSS
+- Rough.js (for hand-drawn shapes)
+- Perfect Freehand (for pencil tool)

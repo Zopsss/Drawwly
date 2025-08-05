@@ -6,6 +6,9 @@ import {
   renderElementOnCanvas,
   getOrCreateShape,
   getSvgPathFromStroke,
+  ShapeElement,
+  TextElement,
+  PencilElement,
 } from "@/lib/canvas/canvas";
 import { createClient } from "@/lib/supabase/client";
 import { SupabaseClient } from "@supabase/supabase-js";
@@ -20,6 +23,7 @@ import getStroke from "perfect-freehand";
 import ZoomButtons from "./zoom-buttons";
 import Textarea from "./textarea";
 import useZoomAndPan from "@/hooks/useZoomAndPan";
+import useSelection from "@/hooks/useSelection";
 
 export default function Canvas({
   roomId,
@@ -80,9 +84,29 @@ export default function Canvas({
     userId
   );
 
+  const {
+    selectionState,
+    getResizeHandles,
+    handleSelectionMouseDown,
+    handleSelectionMouseMove,
+    handleSelectionMouseUp,
+    handleKeyDown,
+  } = useSelection(
+    zoom,
+    panOffset,
+    ctx,
+    selectedTool,
+    existingShapes,
+    setExistingShapes,
+    supabase,
+    roomId
+  );
+
   const handleOnMouseDown = (e: React.MouseEvent) => {
     if (selectedTool === "Panning" || isSpacePressed) {
       handlePanMouseDown(e);
+    } else if (selectedTool === "Selection") {
+      handleSelectionMouseDown(e);
     } else {
       handleDrawMouseDown(e);
     }
@@ -91,6 +115,8 @@ export default function Canvas({
   const handleOnMouseMove = (e: React.MouseEvent) => {
     if (isPanning) {
       handlePanMouseMove(e);
+    } else if (selectedTool === "Selection") {
+      handleSelectionMouseMove(e);
     } else {
       handleDrawMouseMove(e);
     }
@@ -99,6 +125,8 @@ export default function Canvas({
   const handleOnMouseUp = (e: React.MouseEvent) => {
     if (isPanning) {
       handlePanMouseUp();
+    } else if (selectedTool === "Selection") {
+      handleSelectionMouseUp();
     } else {
       handleDrawMouseUp(e);
     }
@@ -154,6 +182,16 @@ export default function Canvas({
       window.removeEventListener("keyup", handleKeyUp);
     };
   }, []);
+
+  // Handle keyboard events for selection
+  useEffect(() => {
+    if (selectedTool === "Selection") {
+      window.addEventListener("keydown", handleKeyDown);
+      return () => {
+        window.removeEventListener("keydown", handleKeyDown);
+      };
+    }
+  }, [selectedTool, handleKeyDown]);
 
   // setting textarea's font and rezing it
   useEffect(() => {
@@ -293,6 +331,15 @@ export default function Canvas({
     existingShapes.forEach((element, id) => {
       if (elementsToDelete.has(id)) return;
 
+      // If an element is selected and being moved/resized, skip drawing its "old" version.
+      // We will draw the "live" version from selectionState later.
+      if (
+        selectionState.selectedElement &&
+        id === selectionState.selectedElementId
+      ) {
+        return;
+      }
+
       renderElementOnCanvas(element, roughCanvas, ctx);
     });
 
@@ -320,6 +367,43 @@ export default function Canvas({
       ctx.fill(myPath);
     }
 
+    // Render the "live" version of the selected element during move/resize for smooth feedback
+    if (selectionState.selectedElement) {
+      renderElementOnCanvas(selectionState.selectedElement, roughCanvas, ctx);
+    }
+
+    // Render selection border and resize handles
+    if (selectionState.selectedElement && selectedTool === "Selection") {
+      const { x, y, width, height, type } = selectionState.selectedElement;
+      const padding = type === "Square" || type === "Pencil" ? 10 : 0;
+
+      // Draw selection border
+      ctx.strokeStyle = "#3b82f6";
+      ctx.lineWidth = 2 / zoom;
+      ctx.setLineDash([5 / zoom, 5 / zoom]);
+      ctx.strokeRect(
+        x - padding,
+        y - padding,
+        width + padding * 2,
+        height + padding * 2
+      );
+      ctx.setLineDash([]);
+
+      // Draw resize handles
+      const handles = getResizeHandles(selectionState.selectedElement);
+      ctx.fillStyle = "#3b82f6";
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1 / zoom;
+
+      handles.forEach((handle) => {
+        ctx.beginPath();
+        const handleSize = 8 / zoom;
+        ctx.rect(handle.x, handle.y, handleSize, handleSize);
+        ctx.fill();
+        ctx.stroke();
+      });
+    }
+
     ctx.restore();
   }, [
     existingShapes,
@@ -330,6 +414,10 @@ export default function Canvas({
     points,
     zoom,
     panOffset,
+    selectionState.selectedElement,
+    selectionState.selectedElementId,
+    selectedTool,
+    getResizeHandles,
   ]);
 
   // Handling new shapes created by other users
@@ -409,6 +497,65 @@ export default function Canvas({
               return newShapes;
             }
             return prevShapes; // Return previous state if ID not found
+          });
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "drawing_elements",
+          filter: `room_id=eq.${roomId}`,
+        },
+        (payload) => {
+          if (payload.new.user_id === userId) {
+            return;
+          }
+
+          const { id, type, data } = payload.new;
+          const { x, y, width, height, content, points, options } = data;
+
+          setExistingShapes((prevShapes) => {
+            const newShapes = new Map(prevShapes);
+
+            if (type !== "Text" && type !== "Pencil") {
+              const newShape = getOrCreateShape(type, x, y, width, height);
+              const newElement: ShapeElement = {
+                type: type,
+                x,
+                y,
+                width,
+                height,
+                shape: newShape,
+              };
+              newShapes.set(id, newElement);
+            } else if (type === "Text") {
+              const newElement: TextElement = {
+                type: "Text",
+                x,
+                y,
+                width,
+                height,
+                content,
+                options,
+              };
+              newShapes.set(id, newElement);
+            } else if (type === "Pencil") {
+              const newElement: PencilElement = {
+                type: "Pencil",
+                x,
+                y,
+                width,
+                height,
+                points,
+                options,
+              };
+              newShapes.set(id, newElement);
+              console.log("set new pencil element.");
+            }
+
+            return newShapes;
           });
         }
       )
